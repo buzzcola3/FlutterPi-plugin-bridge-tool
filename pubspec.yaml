@@ -1,7 +1,7 @@
 name: flutterpi_tool
-description: A tool to make development & distribution of flutter-pi apps easier.
+description: FlutterPi-plugin-bridge-tool - a tool to make development & distribution of flutter-pi apps easier.
 version: 0.10.1
-repository: https://github.com/ardera/flutterpi_tool
+repository: https://github.com/buzzcola3/FlutterPi-plugin-bridge-tool
 
 environment:
   sdk: ^3.0.5
@@ -10,6 +10,8 @@ environment:
 executables:
   # TODO(ardera): Maybe add an alias `flutterpi-tool` here?
   flutterpi_tool: flutterpi_tool
+  flutterpi-plugin-bridge-tool: flutterpi_tool
+  FlutterPi-plugin-bridge-tool: flutterpi_tool
 
 # Add regular dependencies here.
 dependencies:

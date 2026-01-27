@@ -8,8 +8,8 @@ class FlutterpiToolCommandRunner extends CommandRunner<void>
     implements FlutterCommandRunner {
   FlutterpiToolCommandRunner({bool verboseHelp = false})
       : super(
-          'flutterpi_tool',
-          'A tool to make development & distribution of flutter-pi apps easier.',
+          'FlutterPi-plugin-bridge-tool',
+          'FlutterPi-plugin-bridge-tool - a tool to make development & distribution of flutter-pi apps easier.',
           usageLineLength: 120,
         ) {
     argParser.addOption(

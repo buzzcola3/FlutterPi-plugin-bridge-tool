@@ -18,6 +18,7 @@ abstract class FlutterpiAppBundle extends fl.ApplicationPackage {
     required super.id,
     required this.name,
     required this.displayName,
+    this.pluginListFile,
     this.includesFlutterpiBinary = true,
   });
 
@@ -26,6 +27,8 @@ abstract class FlutterpiAppBundle extends fl.ApplicationPackage {
 
   @override
   final String displayName;
+
+  final File? pluginListFile;
 
   final bool includesFlutterpiBinary;
 }
@@ -46,6 +49,7 @@ class PrebuiltFlutterpiAppBundle extends FlutterpiAppBundle {
     required String displayName,
     required this.directory,
     required this.binaries,
+    super.pluginListFile,
     super.includesFlutterpiBinary,
   }) : super(id: id, name: name, displayName: displayName);
 
@@ -374,6 +378,7 @@ class FlutterpiSshDevice extends fl.Device {
     required fl.BuildMode runtimeMode,
     Iterable<String> engineArgs = const [],
     Iterable<String> dartCmdlineArgs = const [],
+    String? pluginListPath,
   }) {
     final runtimeModeArg = switch (runtimeMode) {
       fl.BuildMode.debug => null,
@@ -393,9 +398,14 @@ class FlutterpiSshDevice extends fl.Device {
       if (args.dummyDisplaySize case (final width, final height))
         '--dummy-display-size=$width,$height',
       if (runtimeModeArg != null) runtimeModeArg,
+      if (pluginListPath != null) ...['--plugin-list', pluginListPath],
       bundlePath,
       ...engineArgs,
     ];
+  }
+
+  String _shellEscape(String value) {
+    return "'${value.replaceAll("'", r"'\''")}'";
   }
 
   @visibleForTesting
@@ -543,6 +553,14 @@ class FlutterpiSshDevice extends fl.Device {
         route: route,
       );
 
+      final pluginListPath =
+          (prebuiltApp.pluginListFile?.existsSync() ?? false)
+              ? path.posix.join(
+                  remoteInstallPath,
+                  path.basename(prebuiltApp.pluginListFile!.path),
+                )
+              : null;
+
       command = buildFlutterpiCommand(
         flutterpiExe: flutterpiExePath,
         bundlePath: remoteInstallPath,
@@ -552,13 +570,15 @@ class FlutterpiSshDevice extends fl.Device {
           if (debuggingOptions.deviceVmServicePort == null)
             '--vm-service-port=$devicePort',
         ],
+        pluginListPath: pluginListPath,
       );
     } on Exception catch (e) {
       fl.throwToolExit(e.toString());
     }
 
     final sshProcess = await sshUtils.startSsh(
-      command: command.join(' '),
+      command:
+          'cd ${_shellEscape(remoteInstallPath)} && ${command.join(' ')}',
       allocateTTY: true,
       localPortForwards: [
         (hostPort, devicePort),

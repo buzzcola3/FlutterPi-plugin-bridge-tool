@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print, implementation_imports
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutterpi_tool/src/artifacts.dart';
 import 'package:flutterpi_tool/src/build_system/extended_environment.dart';
@@ -9,6 +10,7 @@ import 'package:flutterpi_tool/src/common.dart';
 import 'package:flutterpi_tool/src/fltool/common.dart';
 import 'package:flutterpi_tool/src/fltool/globals.dart';
 import 'package:flutterpi_tool/src/more_os_utils.dart';
+import 'package:path/path.dart' as p;
 
 class ReleaseBundleFlutterpiAssets extends CompositeTarget {
   ReleaseBundleFlutterpiAssets({
@@ -21,6 +23,7 @@ class ReleaseBundleFlutterpiAssets extends CompositeTarget {
             layout: layout,
             buildMode: BuildMode.release,
           ),
+          FlutterpiPluginBundle(layout: layout),
           CopyIcudtl(layout: layout),
           const DartBuildForNative(),
           const KernelSnapshot(),
@@ -61,6 +64,7 @@ class ProfileBundleFlutterpiAssets extends CompositeTarget {
             layout: layout,
             buildMode: BuildMode.profile,
           ),
+          FlutterpiPluginBundle(layout: layout),
           CopyIcudtl(layout: layout),
           const DartBuildForNative(),
           const KernelSnapshot(),
@@ -101,6 +105,7 @@ class DebugBundleFlutterpiAssets extends CompositeTarget {
             layout: layout,
             buildMode: BuildMode.debug,
           ),
+          FlutterpiPluginBundle(layout: layout),
           CopyIcudtl(layout: layout),
           const DartBuildForNative(),
           const KernelSnapshot(),
@@ -557,5 +562,182 @@ class CopyFlutterAssets extends Target {
       depfile,
       environment.buildDir.childFile('flutter_assets.d'),
     );
+  }
+}
+
+class _FlutterpiPluginInfo {
+  _FlutterpiPluginInfo({required this.name, required this.path});
+
+  final String name;
+  final String path;
+}
+
+String _normalizePluginName(String name) => name.replaceAll('-', '_');
+
+String _pluginLibraryName(String name) =>
+    'lib${_normalizePluginName(name)}_plugin.so';
+
+String _pluginSymbolName(String name) =>
+    '${_normalizePluginName(name)}_plugin_register_with_registrar';
+
+List<_FlutterpiPluginInfo> _readLinuxPlugins(ExtendedEnvironment environment) {
+  final pluginsFile = environment.projectDir
+      .childFile('.flutter-plugins-dependencies');
+  if (!pluginsFile.existsSync()) {
+    environment.logger.printTrace(
+      'No .flutter-plugins-dependencies file found. Skipping plugin bundling.',
+    );
+    return const [];
+  }
+
+  final content = pluginsFile.readAsStringSync();
+  final Map<String, Object?> parsed =
+      (jsonDecode(content) as Map<String, Object?>);
+  final plugins = parsed['plugins'];
+  if (plugins is! Map<String, Object?>) {
+    return const [];
+  }
+
+  final linuxPlugins = plugins['linux'];
+  if (linuxPlugins is! List<Object?>) {
+    return const [];
+  }
+
+  return linuxPlugins
+      .whereType<Map<String, Object?>>()
+      .map((entry) {
+        final name = entry['name'];
+        final path = entry['path'];
+        if (name is String && path is String) {
+          return _FlutterpiPluginInfo(name: name, path: path);
+        }
+        return null;
+      })
+      .whereType<_FlutterpiPluginInfo>()
+      .toList(growable: false);
+}
+
+File? _findFirstFileNamed(Directory root, String fileName) {
+  if (!root.existsSync()) {
+    return null;
+  }
+
+  final matches = root
+      .listSync(recursive: true, followLinks: false)
+      .whereType<File>()
+      .where((file) => file.basename == fileName)
+      .toList(growable: false);
+
+  if (matches.isEmpty) {
+    return null;
+  }
+
+  File pickBestMatch() {
+    for (final file in matches) {
+      final normalized = p.normalize(file.path);
+      if (normalized.contains('${p.separator}bundle${p.separator}lib') ||
+          normalized.contains('${p.separator}plugins${p.separator}')) {
+        return file;
+      }
+    }
+    return matches.first;
+  }
+
+  return pickBestMatch();
+}
+
+File? _findPluginLibrary(
+  ExtendedEnvironment environment,
+  _FlutterpiPluginInfo plugin,
+) {
+  final fs = environment.fileSystem;
+  final libName = _pluginLibraryName(plugin.name);
+
+  final pluginDir = p.isAbsolute(plugin.path)
+      ? fs.directory(plugin.path)
+      : environment.projectDir.childDirectory(plugin.path);
+
+  final buildDir = environment.projectDir.childDirectory('build');
+
+  final candidates = <Directory>[
+    buildDir.childDirectory('flutter-pi').childDirectory('plugins'),
+    buildDir.childDirectory('linux'),
+    pluginDir.childDirectory('build'),
+  ];
+
+  for (final dir in candidates) {
+    final match = _findFirstFileNamed(dir, libName);
+    if (match != null) {
+      return match;
+    }
+  }
+
+  final fallback = _findFirstFileNamed(buildDir, libName);
+  if (fallback != null) {
+    return fallback;
+  }
+
+  return null;
+}
+
+class FlutterpiPluginBundle extends Target {
+  const FlutterpiPluginBundle({required this.layout});
+
+  final FilesystemLayout layout;
+
+  @override
+  String get name => 'flutterpi_plugin_bundle';
+
+  @override
+  List<Target> get dependencies => const [];
+
+  @override
+  List<Source> get inputs => const <Source>[
+        Source.pattern('{PROJECT_DIR}/.flutter-plugins-dependencies'),
+      ];
+
+  @override
+  List<Source> get outputs => const <Source>[
+        Source.pattern('{OUTPUT_DIR}/flutter_plugins.json'),
+        Source.pattern('{OUTPUT_DIR}/plugins/*'),
+      ];
+
+  @override
+  Future<void> build(covariant ExtendedEnvironment environment) async {
+    final outputDir = environment.outputDir;
+    if (!outputDir.existsSync()) {
+      outputDir.createSync(recursive: true);
+    }
+
+    final pluginOutputDir = outputDir.childDirectory('plugins');
+    if (!pluginOutputDir.existsSync()) {
+      pluginOutputDir.createSync(recursive: true);
+    }
+
+    final plugins = _readLinuxPlugins(environment);
+    final entries = <Map<String, String>>[];
+
+    for (final plugin in plugins) {
+      final libName = _pluginLibraryName(plugin.name);
+      final libFile = _findPluginLibrary(environment, plugin);
+      if (libFile == null) {
+        environment.logger.printWarning(
+          'Could not find built plugin library for ${plugin.name}. '
+          'Expected $libName somewhere in build outputs.',
+        );
+        continue;
+      }
+
+      final outputFile = pluginOutputDir.childFile(libName);
+      libFile.copySync(outputFile.path);
+
+      entries.add({
+        'path': p.posix.join('plugins', libName),
+        'symbol': _pluginSymbolName(plugin.name),
+      });
+    }
+
+    final pluginListFile = outputDir.childFile('flutter_plugins.json');
+    pluginListFile.writeAsStringSync(jsonEncode(entries));
   }
 }

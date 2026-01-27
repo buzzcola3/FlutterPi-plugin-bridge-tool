@@ -211,12 +211,14 @@ class AppBuilder {
         outDir.childDirectory('bin').childFile('flutter-pi');
     final metaFlutterDbgsyms =
         outDir.childDirectory('lib').childFile('libflutter_engine.dbgsyms');
+    final pluginListFile = outDir.childFile('flutter_plugins.json');
 
     return PrebuiltFlutterpiAppBundle(
       id: id,
       name: id,
       displayName: id,
       directory: outDir,
+      pluginListFile: pluginListFile.existsSync() ? pluginListFile : null,
 
       // FIXME: This should be populated by the build targets instead.
       binaries: switch (fsLayout) {

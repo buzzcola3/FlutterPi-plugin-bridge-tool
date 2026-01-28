@@ -53,6 +53,20 @@ Tools & Devices
 Run "FlutterPi-plugin-bridge-tool help <command>" for more information about a command.
 ```
 
+## Build any Flutter app with Linux plugins (short steps)
+1. Build FlutterPi-plugin-bridge with the GTK shim enabled.
+  - Optional: build plugin(s) into the binary using repo-specific CMake flags (e.g. `-DBUILD_OPENAUTOFLUTTER_PLUGIN=ON`).
+2. Build your app’s Linux plugin .so files:
+  - `flutter build linux --debug` (or `--release`) in your app.
+3. Create the flutter-pi bundle with this tool:
+  - `FlutterPi-plugin-bridge-tool build --arch=arm64 --cpu=generic --debug --flutterpi-binary=/path/to/flutter-pi`
+4. Copy the bundle to the target and run it with `flutter-pi`:
+  - `flutter-pi /path/to/bundle`
+
+Notes:
+- Plugins are discovered from `.flutter-plugins-dependencies` and the built `.so` files.
+- For KMS/DRM, run on a VT (no desktop) or ensure DRM permissions are correct.
+
 ## Examples
 ### 1. Adding a device
 ```console

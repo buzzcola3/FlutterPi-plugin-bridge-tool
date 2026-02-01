@@ -577,6 +577,31 @@ String _normalizePluginName(String name) => name.replaceAll('-', '_');
 String _pluginLibraryName(String name) =>
     'lib${_normalizePluginName(name)}_plugin.so';
 
+const String _flutterLinuxGtkLibraryName = 'libflutter_linux_gtk.so';
+const String _runBundleScriptName = 'run_bundle.sh';
+const String _runBundleScriptContent = r'''#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 /path/to/bundle [flutter-pi args...]" >&2
+  exit 1
+fi
+
+bundle="$1"
+shift
+
+bundle_dir="$(cd "$bundle" && pwd)"
+flutterpi="$bundle_dir/flutter-pi"
+
+if [[ ! -x "$flutterpi" ]]; then
+  echo "Error: bundled flutter-pi not found or not executable at $flutterpi" >&2
+  exit 1
+fi
+
+export LD_LIBRARY_PATH="$bundle_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$flutterpi" "$@" "$bundle_dir"
+''';
+
 String _pluginSymbolName(String name) =>
     '${_normalizePluginName(name)}_plugin_register_with_registrar';
 
@@ -617,7 +642,11 @@ List<_FlutterpiPluginInfo> _readLinuxPlugins(ExtendedEnvironment environment) {
       .toList(growable: false);
 }
 
-File? _findFirstFileNamed(Directory root, String fileName) {
+File? _findFirstFileNamed(
+  Directory root,
+  String fileName, {
+  List<String> preferredPathTokens = const <String>[],
+}) {
   if (!root.existsSync()) {
     return null;
   }
@@ -632,18 +661,74 @@ File? _findFirstFileNamed(Directory root, String fileName) {
     return null;
   }
 
+  bool segmentMatchesToken(String segment, String token) {
+    if (segment == token) {
+      return true;
+    }
+    return segment.startsWith('$token-') ||
+      segment.startsWith('${token}_') ||
+      segment.endsWith('-$token') ||
+      segment.endsWith('_$token') ||
+      segment.contains('-$token-') ||
+      segment.contains('_${token}_') ||
+      segment.contains('-${token}_') ||
+      segment.contains('_${token}-');
+  }
+
+  bool pathContainsToken(String normalized, String token) {
+    final segments = p.split(normalized);
+    return segments.any((segment) => segmentMatchesToken(segment, token));
+  }
+
   File pickBestMatch() {
-    for (final file in matches) {
+    final filteredMatches = preferredPathTokens.isEmpty
+        ? matches
+        : matches
+            .where((file) {
+              final normalized = p.normalize(file.path);
+              return preferredPathTokens
+                  .any((token) => pathContainsToken(normalized, token));
+            })
+            .toList(growable: false);
+
+    final bestMatches =
+        filteredMatches.isNotEmpty ? filteredMatches : matches;
+
+    for (final file in bestMatches) {
       final normalized = p.normalize(file.path);
       if (normalized.contains('${p.separator}bundle${p.separator}lib') ||
           normalized.contains('${p.separator}plugins${p.separator}')) {
         return file;
       }
     }
-    return matches.first;
+    return bestMatches.first;
   }
 
   return pickBestMatch();
+}
+
+List<String> _targetPathTokens(String? targetShortName) {
+  if (targetShortName == 'aarch64-generic' ||
+      targetShortName == 'pi3-64' ||
+      targetShortName == 'pi4-64') {
+    return const <String>['aarch64', 'arm64'];
+  }
+
+  if (targetShortName == 'armv7-generic' ||
+      targetShortName == 'pi3' ||
+      targetShortName == 'pi4') {
+    return const <String>['armv7', 'arm'];
+  }
+
+  if (targetShortName == 'x64-generic') {
+    return const <String>['x64', 'x86_64'];
+  }
+
+  if (targetShortName == 'riscv64-generic') {
+    return const <String>['riscv64'];
+  }
+
+  return const <String>[];
 }
 
 File? _findPluginLibrary(
@@ -652,6 +737,8 @@ File? _findPluginLibrary(
 ) {
   final fs = environment.fileSystem;
   final libName = _pluginLibraryName(plugin.name);
+  final targetTokens =
+      _targetPathTokens(environment.defines['flutterpi-target']);
 
   final pluginDir = p.isAbsolute(plugin.path)
       ? fs.directory(plugin.path)
@@ -666,15 +753,46 @@ File? _findPluginLibrary(
   ];
 
   for (final dir in candidates) {
-    final match = _findFirstFileNamed(dir, libName);
+    final match = _findFirstFileNamed(
+      dir,
+      libName,
+      preferredPathTokens: targetTokens,
+    );
     if (match != null) {
       return match;
     }
   }
 
-  final fallback = _findFirstFileNamed(buildDir, libName);
+  final fallback = _findFirstFileNamed(
+    buildDir,
+    libName,
+    preferredPathTokens: targetTokens,
+  );
   if (fallback != null) {
     return fallback;
+  }
+
+  return null;
+}
+
+File? _findFlutterLinuxGtkLibrary(ExtendedEnvironment environment) {
+  final buildDir = environment.projectDir.childDirectory('build');
+  final targetTokens =
+      _targetPathTokens(environment.defines['flutterpi-target']);
+  final candidates = <Directory>[
+    buildDir.childDirectory('linux'),
+    buildDir,
+  ];
+
+  for (final dir in candidates) {
+    final match = _findFirstFileNamed(
+      dir,
+      _flutterLinuxGtkLibraryName,
+      preferredPathTokens: targetTokens,
+    );
+    if (match != null) {
+      return match;
+    }
   }
 
   return null;
@@ -698,8 +816,8 @@ class FlutterpiPluginBundle extends Target {
 
   @override
   List<Source> get outputs => const <Source>[
-        Source.pattern('{OUTPUT_DIR}/flutter_plugins.json'),
         Source.pattern('{OUTPUT_DIR}/plugins/*'),
+      Source.pattern('{OUTPUT_DIR}/run_bundle.sh'),
       ];
 
   @override
@@ -715,7 +833,6 @@ class FlutterpiPluginBundle extends Target {
     }
 
     final plugins = _readLinuxPlugins(environment);
-    final entries = <Map<String, String>>[];
 
     for (final plugin in plugins) {
       final libName = _pluginLibraryName(plugin.name);
@@ -731,13 +848,30 @@ class FlutterpiPluginBundle extends Target {
       final outputFile = pluginOutputDir.childFile(libName);
       libFile.copySync(outputFile.path);
 
-      entries.add({
-        'path': p.posix.join('plugins', libName),
-        'symbol': _pluginSymbolName(plugin.name),
-      });
     }
 
-    final pluginListFile = outputDir.childFile('flutter_plugins.json');
-    pluginListFile.writeAsStringSync(jsonEncode(entries));
+    final runScriptOutput = outputDir.childFile(_runBundleScriptName);
+    runScriptOutput.writeAsStringSync(_runBundleScriptContent);
+    fixupExePermissions(
+      runScriptOutput,
+      runScriptOutput,
+      platform: environment.platform,
+      logger: environment.logger,
+      os: environment.operatingSystemUtils,
+    );
+
+    final flutterGtkLib = _findFlutterLinuxGtkLibrary(environment);
+    if (flutterGtkLib == null) {
+      environment.logger.printTrace(
+        'Could not find $_flutterLinuxGtkLibraryName in build outputs. '
+        'Skipping bundling GTK shim library.',
+      );
+    } else {
+      final gtkOutputFile =
+          outputDir.childFile(_flutterLinuxGtkLibraryName);
+      flutterGtkLib.copySync(gtkOutputFile.path);
+    }
+
+    // flutter_plugins.json is intentionally not generated.
   }
 }

@@ -60,8 +60,9 @@ Run "FlutterPi-plugin-bridge-tool help <command>" for more information about a c
   - `flutter build linux --debug` (or `--release`) in your app.
 3. Create the flutter-pi bundle with this tool:
   - `FlutterPi-plugin-bridge-tool build --arch=arm64 --cpu=generic --debug --flutterpi-binary=/path/to/flutter-pi`
-4. Copy the bundle to the target and run it with `flutter-pi`:
-  - `flutter-pi /path/to/bundle`
+4. Run the bundle with the generated run script (sets LD_LIBRARY_PATH and uses bundled flutter-pi):
+  - `cd build/flutter-pi/arm64-generic`
+  - `./run_bundle.sh . --debug`
 
 Notes:
 - Plugins are discovered from `.flutter-plugins-dependencies` and the built `.so` files.

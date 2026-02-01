@@ -578,6 +578,8 @@ String _pluginLibraryName(String name) =>
     'lib${_normalizePluginName(name)}_plugin.so';
 
 const String _flutterLinuxGtkLibraryName = 'libflutter_linux_gtk.so';
+const String _flutterLinuxGtkShimLibraryName =
+  'libflutter_linux_gtk_shim.so';
 const String _runBundleScriptName = 'run_bundle.sh';
 const String _runBundleScriptContent = r'''#!/usr/bin/env bash
 set -euo pipefail
@@ -870,6 +872,9 @@ class FlutterpiPluginBundle extends Target {
       final gtkOutputFile =
           outputDir.childFile(_flutterLinuxGtkLibraryName);
       flutterGtkLib.copySync(gtkOutputFile.path);
+      final gtkShimOutputFile =
+          outputDir.childFile(_flutterLinuxGtkShimLibraryName);
+      flutterGtkLib.copySync(gtkShimOutputFile.path);
     }
 
     // flutter_plugins.json is intentionally not generated.
